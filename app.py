@@ -31,32 +31,34 @@ def get_api_key() -> str | None:
     except (FileNotFoundError, KeyError):
         secret_key = None
 
-    return secret_key or os.getenv("OPENAI_API_KEY")
+    return (secret_key or os.getenv("OPENAI_API_KEY") or "").strip() or None
 
 
 def transcribe_audio(client: OpenAI, audio_bytes: bytes) -> str:
     audio_file = io.BytesIO(audio_bytes)
     audio_file.name = "recording.wav"
     transcript = client.audio.transcriptions.create(
-        model="gpt-4o-mini-transcribe",
+        model="whisper-1",
         file=audio_file,
     )
     return transcript.text.strip()
 
 
 def get_medical_response(client: OpenAI, transcript: str) -> str:
-    response = client.responses.create(
+    response = client.chat.completions.create(
         model="gpt-4o-mini",
-        instructions=SYSTEM_PROMPT,
-        input=transcript,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": transcript},
+        ],
     )
-    return response.output_text.strip()
+    return response.choices[0].message.content.strip()
 
 
 def synthesize_speech(client: OpenAI, text: str) -> bytes:
     speech = client.audio.speech.create(
-        model="gpt-4o-mini-tts",
-        voice="coral",
+        model="tts-1",
+        voice="alloy",
         input=text,
         response_format="mp3",
     )
@@ -95,7 +97,17 @@ if audio is not None:
             st.subheader("Assistant response")
             st.write(answer)
             st.audio(spoken_answer, format="audio/mpeg")
-        except OpenAIError:
-            st.error("OpenAI could not process that request. Check your API key, account access, and try again.")
+        except OpenAIError as error:
+            error_message = str(error)
+            if "401" in error_message or "Incorrect API key" in error_message:
+                detail = "The OpenAI API key is invalid or expired. Create a new key and update your Secret."
+            elif "429" in error_message or "quota" in error_message.lower():
+                detail = "The OpenAI account has no available quota. Check billing and usage limits."
+            elif "model" in error_message.lower():
+                detail = "The selected OpenAI model is unavailable for this account."
+            else:
+                detail = "OpenAI rejected the request. Check the app logs for the full error."
+            st.error(detail)
+            st.caption(f"OpenAI error: {error_message[:300]}")
         except Exception:
             st.error("Something went wrong while processing the recording. Please try again.")
